@@ -34,7 +34,7 @@ class DamageFormula:
 
     def calc(self, attacker: Unit, defender: Unit, raw_damage: Optional[int] = None,
              crit_bonuses: list = None, is_true_damage: bool = False) -> dict:
-        """计算伤害。BUG：负抗性无上限，暴伤加法，闪避暴击优先级错。"""
+        """计算伤害：闪避 → 抗性（有上下限）→ 暴击（乘法）→ 吸收盾。"""
         if raw_damage is None:
             raw_damage = attacker.attack
         if crit_bonuses is None:
@@ -42,32 +42,30 @@ class DamageFormula:
 
         result = {"dodge": False, "crit": False, "damage": 0, "absorbed": 0}
 
-        # BUG：先判暴击再判闪避，应该先闪避
-        crit_roll = self._rng()
-        is_crit = crit_roll < attacker.crit_rate
-
+        # 闪避优先于暴击
         dodge_roll = self._rng()
         is_dodge = dodge_roll < defender.dodge_rate
-
         if is_dodge:
             result["dodge"] = True
             return result
 
-        # 抗性减伤
+        crit_roll = self._rng()
+        is_crit = crit_roll < attacker.crit_rate
+
+        # 抗性减伤：减伤上限100%，负抗性增伤上限100%（最多翻倍）
         if is_true_damage:
             dmg = raw_damage
         else:
-            # BUG：负抗性没有上限，可以无限增伤
-            reduction = defender.defense / 100.0  # BUG：浮点
-            dmg = int(raw_damage * (1 - reduction))
+            reduction_pct = max(-100, min(100, defender.defense))
+            dmg = raw_damage * (100 - reduction_pct) // 100
 
         # 暴击
         if is_crit:
             result["crit"] = True
-            # BUG：暴伤加法叠加，应该乘法
-            total_crit = attacker.crit_dmg
+            # 暴伤乘法叠加
+            total_crit = float(attacker.crit_dmg)
             for b in crit_bonuses:
-                total_crit += b  # BUG：加法
+                total_crit *= (100 + b) / 100.0
             dmg = int(dmg * total_crit / 100)
 
         # 吸收盾
@@ -76,6 +74,7 @@ class DamageFormula:
             result["absorbed"] = absorbed
             dmg -= absorbed
 
-        # BUG：没有确保非负
+        # 伤害非负
+        dmg = max(0, dmg)
         result["damage"] = dmg
         return result
